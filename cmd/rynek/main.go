@@ -78,7 +78,7 @@ func rootTask(cmd *cli.Command) (rynek.Task, error) {
 	if name == "" {
 		return nil, fmt.Errorf("missing <Task> (try: rynek list)")
 	}
-	extra := map[string]string{"home": cmd.String("home")}
+	extra := map[string]string{}
 	if info, ok := rynek.Info(name); ok {
 		for _, pr := range info.Params {
 			if pr.Default != "" {
@@ -93,7 +93,7 @@ func rootTask(cmd *cli.Command) (rynek.Task, error) {
 		}
 		extra[k] = v
 	}
-	p := rynek.Params{Extra: extra}
+	p := rynek.Params{Base: cmd.String("home"), Extra: extra}
 	if d := cmd.String("date"); d != "" {
 		parsed, err := time.Parse(dateLayout, d)
 		if err != nil {
@@ -316,11 +316,11 @@ func printTaskHelp(name string) error {
 // defaultParams builds the Params a task would receive with no flags: the
 // default home and each documented parameter's default.
 func defaultParams(info rynek.Registration) rynek.Params {
-	extra := map[string]string{"home": ".data"}
+	extra := map[string]string{}
 	for _, pr := range info.Params {
 		extra[pr.Name] = pr.Default
 	}
-	return rynek.Params{Extra: extra}
+	return rynek.Params{Base: rynek.DefaultBase, Extra: extra}
 }
 
 func listCmd() *cli.Command {

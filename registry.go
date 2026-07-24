@@ -7,10 +7,14 @@ import (
 	"time"
 )
 
-// Params carries the values the CLI passes to a task constructor. Date is
-// optional: one-off tasks can ignore it and key themselves statically. Extra
-// holds any remaining string parameters (source, style, feed, ...).
+// Params carries the values the CLI passes to a task constructor. Base is the
+// structural artifact root (the "-" home directory); it shapes where output
+// goes but never appears in a filename. Date is optional: one-off tasks can
+// ignore it and key themselves statically. Extra holds the remaining string
+// parameters (source, style, feed, ...), each of which does contribute to the
+// conventional filename (see Path).
 type Params struct {
+	Base  string
 	Date  time.Time
 	Extra map[string]string
 }
