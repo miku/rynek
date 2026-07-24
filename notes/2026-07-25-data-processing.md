@@ -103,3 +103,77 @@ If I would know all inputs to a black box process and the result, the mapping
 would relate to an unknown function, that relates the input to the output.
 
 An LLM is a machine, that can explore a black box.
+
+# misc
+
+The preceding notes state a position. This section is meant to make it *useful*:
+to sharpen the data-derivation problem into questions we can answer, and to give
+us a way to judge how faithfully a real system (make, luigi, dvc, bazel, airflow,
+dagster, prefect, nix) embodies it. "Fidelity" here means the gap between what a
+system treats as the identity of a derived artifact and what actually determines
+that artifact's value.
+
+## Sharpening the problem
+
+* **Write the derivation function down.** An artifact is the value of
+  `f(inputs)`. The whole question of correctness is whether a system's notion of
+  "the same artifact" coincides with equality of `(f, inputs)`. Most confusion
+  comes from an incomplete accounting of `inputs`: upstream data, parameters,
+  the code of `f`, the toolchain/environment, and any hidden state (clock,
+  randomness, locale, filesystem order). Every determinant left out of the
+  identity is a source of silent staleness.
+
+* **Treat code as data.** A code dependency and a data dependency are the same
+  relation at different scales. A faithful account folds the version of `f` into
+  the input set, so that editing a transform invalidates its outputs exactly as
+  changing a raw input would. Systems that track one but not the other are only
+  half-reproducible.
+
+* **The real design space is cache economics, not scheduling.** If everything is
+  raw data plus cached computation, the open problem is *which* derivations to
+  materialize and which to recompute on demand. That is an optimization over
+  storage cost, recompute cost, access frequency, and tolerable latency — a
+  caching and eviction question. Scheduling is downstream of it.
+
+* **Name the addressing scheme.** Location-addressed (a path/convention),
+  content-addressed (a hash of the bytes), and derivation-addressed (a hash of
+  recipe + inputs) each make a different promise and fail differently. A
+  system's guarantees are mostly decided by which one it uses to answer "is this
+  already built?"
+
+* **Reproducibility is a spectrum, not a bit.** Distinguish: same inputs yield
+  the same bytes (bit-reproducible); yield the same value under some equivalence
+  (semantically reproducible); or are merely obtainable again at all
+  (recomputable). Randomness, nondeterministic tools, and floating point decide
+  where a pipeline sits.
+
+## A fidelity rubric
+
+Questions to put to any data system; the answers place it on the spectrum above.
+
+* **Identity completeness.** What does it hash or compare to decide "already
+  built" — output existence, input mtime, or input content — and which real
+  determinants (code, params, environment) are *missing* from that check? The
+  missing set is the fidelity gap, and it manifests as false cache hits.
+* **Immutability.** Are artifacts append-only and never mutated in place, so a
+  name always denotes one value?
+* **Where data lives.** Does data pass through durable, addressable storage, or
+  in memory between steps? This bounds scale and decides whether intermediates
+  survive a crash and can be inspected.
+* **Provenance.** Given any artifact, can the system say what produced it, from
+  which inputs, with which code?
+* **Atomicity.** On interruption, can a partial output be mistaken for a
+  complete one?
+* **Cache discipline.** Can it reclaim an intermediate and rederive it on
+  demand — i.e. does it truly treat manifest data as a cache, or as precious
+  state it dares not delete?
+
+## Prior art to lean on
+
+* "Build Systems à la Carte" (Mokhov, Mitchell, Peyton Jones) already formalizes
+  tasks, keys, and rebuilders, and — usefully — shows that *how to schedule* and
+  *how to decide staleness* are two independent choices. Borrowing that
+  vocabulary keeps this discussion rigorous instead of reinventing terms.
+* Nix and content-addressed stores are the sharpest existing answer to
+  "derivation as identity"; worth studying as the high-fidelity end of the
+  spectrum, and for where that fidelity becomes too expensive to want.
