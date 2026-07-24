@@ -88,3 +88,18 @@ is to write it without.
 
 Data is the empirical world. The empirical world does not lie, but it can miss
 things.
+
+A dataset can be decomposed into a smaller parts. A dataset derivation can be
+composed into a set of smaller tasks. The derivation and the dataset are two
+variants of the same. The one represents the result the other the process.
+
+The result and the process are interchangable. If I know the result, I can
+reverse engineer a process that yields the result. If I know the process, I can
+run it and derive the result.
+
+Going from the result to the process is more difficult. It can be much more difficult.
+
+If I would know all inputs to a black box process and the result, the mapping
+would relate to an unknown function, that relates the input to the output.
+
+An LLM is a machine, that can explore a black box.
