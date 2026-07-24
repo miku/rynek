@@ -7,8 +7,12 @@ import (
 	"strings"
 )
 
-// DefaultBase is the artifact root used when Params.Base is empty.
-const DefaultBase = ".data"
+// DefaultBase is the artifact root used when Params.Base is empty. DefaultExt
+// is the output extension used when neither the task nor the project sets one.
+const (
+	DefaultBase = ".data"
+	DefaultExt  = "out"
+)
 
 // Path returns the conventional artifact path for a task, following a
 // convention-over-configuration layout:
@@ -28,6 +32,9 @@ func (p Params) Path(task, ext string) string {
 	base := p.Base
 	if base == "" {
 		base = DefaultBase
+	}
+	if ext == "" {
+		ext = DefaultExt
 	}
 	stem := slug(task)
 	if parts := p.pathParts(); len(parts) > 0 {

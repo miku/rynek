@@ -63,11 +63,7 @@ func (s Shell) out() string {
 	if s.Name == "" {
 		return ""
 	}
-	ext := s.Ext
-	if ext == "" {
-		ext = "out"
-	}
-	return s.P.Path(s.Name, ext)
+	return s.P.Path(s.Name, s.Ext)
 }
 
 // Requires returns the upstream tasks, deduplicated and ordered by placeholder

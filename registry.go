@@ -45,7 +45,7 @@ type Registration struct {
 	Name   string
 	Doc    string
 	Params []Param
-	New    func(Params) Task
+	New    func(Ctx) Task
 }
 
 // Option customizes a task Registration at Register time.
@@ -73,7 +73,7 @@ var (
 // from "rynek run <Name> ...". Optional Doc/WithParam options attach
 // documentation. It panics on a duplicate name, which surfaces wiring mistakes
 // at init time.
-func Register(name string, ctor func(Params) Task, opts ...Option) {
+func Register(name string, ctor func(Ctx) Task, opts ...Option) {
 	regMu.Lock()
 	defer regMu.Unlock()
 	if _, dup := reg[name]; dup {
@@ -87,14 +87,14 @@ func Register(name string, ctor func(Params) Task, opts ...Option) {
 }
 
 // Lookup builds a registered task by name.
-func Lookup(name string, p Params) (Task, error) {
+func Lookup(name string, c Ctx) (Task, error) {
 	regMu.RLock()
 	r, ok := reg[name]
 	regMu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("unknown task: %s (known: %v)", name, Names())
 	}
-	return r.New(p), nil
+	return r.New(c), nil
 }
 
 // Info returns the registration metadata for a task name, for documentation.

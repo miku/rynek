@@ -29,6 +29,11 @@ import (
 
 const dateLayout = "2006-01-02"
 
+// projectExt is this binary's default output extension, applied to every task
+// via the build Ctx unless a task sets its own. A real deployment picks whatever
+// suits its artifacts (here: plain ".txt"); a later step can make it a codec.
+const projectExt = "txt"
+
 func main() {
 	app := &cli.Command{
 		Name:  "rynek",
@@ -101,7 +106,7 @@ func rootTask(cmd *cli.Command) (rynek.Task, error) {
 		}
 		p.Date = parsed
 	}
-	return rynek.Lookup(name, p)
+	return rynek.Lookup(name, rynek.Ctx{Params: p, Ext: projectExt})
 }
 
 func runCmd() *cli.Command {
@@ -297,7 +302,7 @@ func printTaskHelp(name string) error {
 	b.WriteString("   --home DIR          artifact home directory\n")
 
 	// Build the task with defaults to show a concrete output path and deps.
-	task := info.New(defaultParams(info))
+	task := info.New(defaultCtx(info))
 	if out := task.Output(); out != nil {
 		fmt.Fprintf(&b, "\nOUTPUT (with defaults):\n   %s\n", rynek.Describe(out))
 	} else {
@@ -313,14 +318,14 @@ func printTaskHelp(name string) error {
 	return nil
 }
 
-// defaultParams builds the Params a task would receive with no flags: the
-// default home and each documented parameter's default.
-func defaultParams(info rynek.Registration) rynek.Params {
+// defaultCtx builds the Ctx a task would receive with no flags: the default
+// home, the project extension, and each documented parameter's default.
+func defaultCtx(info rynek.Registration) rynek.Ctx {
 	extra := map[string]string{}
 	for _, pr := range info.Params {
 		extra[pr.Name] = pr.Default
 	}
-	return rynek.Params{Base: rynek.DefaultBase, Extra: extra}
+	return rynek.Ctx{Params: rynek.Params{Base: rynek.DefaultBase, Extra: extra}, Ext: projectExt}
 }
 
 func listCmd() *cli.Command {

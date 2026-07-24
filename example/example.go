@@ -41,31 +41,31 @@ import (
 var repeatParam = rynek.WithParam("repeat", "how many times to repeat the sample corpus", "1")
 
 func init() {
-	rynek.Register("Corpus", func(p rynek.Params) rynek.Task { return Corpus{p} },
+	rynek.Register("Corpus", func(c rynek.Ctx) rynek.Task { return Corpus{c} },
 		rynek.Doc("write a fixed sample corpus (a leaf task, no upstream)"), repeatParam)
-	rynek.Register("Tokens", func(p rynek.Params) rynek.Task { return Tokens(p) },
+	rynek.Register("Tokens", func(c rynek.Ctx) rynek.Task { return Tokens(c) },
 		rynek.Doc("lowercase the corpus into one token per line"), repeatParam)
-	rynek.Register("Unique", func(p rynek.Params) rynek.Task { return Unique(p) },
+	rynek.Register("Unique", func(c rynek.Ctx) rynek.Task { return Unique(c) },
 		rynek.Doc("count the number of distinct tokens"), repeatParam)
-	rynek.Register("Frequencies", func(p rynek.Params) rynek.Task { return Frequencies(p) },
+	rynek.Register("Frequencies", func(c rynek.Ctx) rynek.Task { return Frequencies(c) },
 		rynek.Doc("build the token frequency histogram, most frequent first"), repeatParam)
-	rynek.Register("Report", func(p rynek.Params) rynek.Task { return Report(p) },
+	rynek.Register("Report", func(c rynek.Ctx) rynek.Task { return Report(c) },
 		rynek.Doc("combine the distinct-token count and the frequency histogram"), repeatParam)
 }
 
 // Corpus writes a fixed sample text. It generates content in Go rather than
 // shelling out, so it stays a hand-written Task -- the escape hatch that
-// rynek.Shell sits on top of. It uses the same rynek.Params convention for its
-// path and key, and Atomic for the same crash-safe write the Shell tasks get.
-type Corpus struct{ P rynek.Params }
+// rynek.Shell sits on top of. It reads its path and parameters from the ambient
+// Ctx, and uses Atomic for the same crash-safe write the Shell tasks get.
+type Corpus struct{ C rynek.Ctx }
 
-func (t Corpus) path() string           { return t.P.Path("Corpus", "txt") }
+func (t Corpus) path() string           { return t.C.Path("Corpus", t.C.Ext) }
 func (t Corpus) Requires() []rynek.Task { return nil }
 func (t Corpus) Output() rynek.Target   { return rynek.FileTarget{Path: t.path()} }
 func (t Corpus) Key() string            { return "Corpus(" + t.path() + ")" }
 func (t Corpus) Run(ctx context.Context) error {
 	const line = "the quick brown fox the lazy dog the fox jumps the dog sleeps the quick fox\n"
-	repeat := max(t.P.GetInt("repeat", 1), 1)
+	repeat := max(t.C.GetInt("repeat", 1), 1)
 	sample := strings.Repeat(line, repeat)
 	return rynek.Atomic(t.path(), func(w io.Writer) error {
 		_, err := io.WriteString(w, sample)
@@ -74,49 +74,41 @@ func (t Corpus) Run(ctx context.Context) error {
 }
 
 // Tokens lowercases the corpus and emits one word per line. Shared upstream.
-func Tokens(p rynek.Params) rynek.Shell {
-	return rynek.Shell{
+func Tokens(c rynek.Ctx) rynek.Shell {
+	return c.Shell(rynek.Shell{
 		Name: "Tokens",
-		In:   rynek.Inputs{"in": Corpus{p}},
+		In:   rynek.Inputs{"in": Corpus{c}},
 		Cmd:  `tr 'A-Z ' 'a-z\n' < {in} | grep -v '^$' > {out}`,
-		P:    p,
-		Ext:  "txt",
-	}
+	})
 }
 
 // Unique counts the number of distinct tokens.
-func Unique(p rynek.Params) rynek.Shell {
-	return rynek.Shell{
+func Unique(c rynek.Ctx) rynek.Shell {
+	return c.Shell(rynek.Shell{
 		Name: "Unique",
-		In:   rynek.Inputs{"in": Tokens(p)},
+		In:   rynek.Inputs{"in": Tokens(c)},
 		Cmd:  `sort -u < {in} | wc -l | tr -d ' ' > {out}`,
-		P:    p,
-		Ext:  "txt",
-	}
+	})
 }
 
 // Frequencies is the token histogram, most frequent first.
-func Frequencies(p rynek.Params) rynek.Shell {
-	return rynek.Shell{
+func Frequencies(c rynek.Ctx) rynek.Shell {
+	return c.Shell(rynek.Shell{
 		Name: "Frequencies",
-		In:   rynek.Inputs{"in": Tokens(p)},
+		In:   rynek.Inputs{"in": Tokens(c)},
 		Cmd:  `sort < {in} | uniq -c | sort -rn > {out}`,
-		P:    p,
-		Ext:  "txt",
-	}
+	})
 }
 
 // Report combines Unique and Frequencies. Its two dependencies share the Tokens
 // upstream, forming the diamond.
-func Report(p rynek.Params) rynek.Shell {
-	return rynek.Shell{
+func Report(c rynek.Ctx) rynek.Shell {
+	return c.Shell(rynek.Shell{
 		Name: "Report",
 		In: rynek.Inputs{
-			"uniq": Unique(p),
-			"freq": Frequencies(p),
+			"uniq": Unique(c),
+			"freq": Frequencies(c),
 		},
 		Cmd: `{ echo "distinct tokens: $(cat {uniq})"; echo "--- frequencies ---"; cat {freq}; } > {out}`,
-		P:   p,
-		Ext: "txt",
-	}
+	})
 }
