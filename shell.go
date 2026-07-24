@@ -47,15 +47,17 @@ type Shell struct {
 	Cmd  string // bash pipeline template with {out} and one {name} per In entry
 
 	// Output location. By default it is the conventional path derived from
-	// Name/P/Ext; set Out to use an explicit path instead.
-	P   Params // parameters that drive the conventional output path
-	Ext string // output extension for the conventional path (default "out")
-	Out string // explicit output path; overrides the convention when set
+	// Name/P/Ext, plus the codec's suffix; set Out to use an explicit path.
+	P     Params // parameters that drive the conventional output path
+	Ext   string // output extension for the conventional path (default "out")
+	Codec Codec  // transparent compression for output and inferred for inputs
+	Out   string // explicit output path; overrides the convention when set
 }
 
 // out is the resolved output path: the explicit Out if given, otherwise the
-// conventional BASE/Name/Name-<params>.Ext. Empty only when neither an explicit
-// Out nor a Name is set (a pure side-effecting command with no artifact).
+// conventional BASE/Name/Name-<params>.Ext with the codec suffix appended.
+// Empty only when neither an explicit Out nor a Name is set (a pure
+// side-effecting command with no artifact).
 func (s Shell) out() string {
 	if s.Out != "" {
 		return s.Out
@@ -63,7 +65,7 @@ func (s Shell) out() string {
 	if s.Name == "" {
 		return ""
 	}
-	return s.P.Path(s.Name, s.Ext)
+	return s.P.Path(s.Name, s.Ext) + s.Codec.suffix()
 }
 
 // Requires returns the upstream tasks, deduplicated and ordered by placeholder
@@ -117,13 +119,15 @@ func (s Shell) Key() string {
 	return id
 }
 
-// Run renders the pipeline and executes it. Inputs bind to their upstream
-// outputs; {out} binds to a temp file in the output's directory that is renamed
-// into place on success (and removed on failure).
+// Run renders the pipeline and executes it. Each input binds to a shell
+// expression yielding its upstream's (transparently decompressed) contents;
+// {out} binds to a plaintext temp that is promoted into place on success --
+// compressing through the codec first when one is set. A crash or cancellation
+// leaves only temp files, never a half-written artifact that reads as complete.
 func (s Shell) Run(ctx context.Context) error {
 	args := make(map[string]string, len(s.In)+1)
 	for name, dep := range s.In {
-		args[name] = Describe(dep.Output())
+		args[name] = readExpr(Describe(dep.Output()))
 	}
 
 	out := s.out()
@@ -135,19 +139,48 @@ func (s Shell) Run(ctx context.Context) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(dir, "."+filepath.Base(out)+".tmp-*")
+	base := filepath.Base(out)
+
+	// The command always writes plaintext to a temp. Input decompression is
+	// streamed via readExpr, but output compression materializes the plaintext
+	// first: a process-substitution writer would let bash rename before the
+	// background compressor flushed. (A managed-FIFO streaming writer that we can
+	// wait on is a later optimization.)
+	plain, err := os.CreateTemp(dir, "."+base+".plain-*")
 	if err != nil {
 		return err
 	}
-	tmp := f.Name()
-	f.Close()
-	defer os.Remove(tmp) // no-op after a successful rename; cleanup on failure
+	plainName := plain.Name()
+	plain.Close()
+	defer os.Remove(plainName) // no-op once renamed; cleanup otherwise
 
-	args["out"] = tmp
+	args["out"] = plainName
 	if err := Cmd(ctx, s.Cmd, args); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, out); err != nil {
+
+	if s.Codec == NoCodec {
+		if err := os.Rename(plainName, out); err != nil {
+			return fmt.Errorf("promote %s: %w", out, err)
+		}
+		return nil
+	}
+
+	comp, err := os.CreateTemp(dir, "."+base+".tmp-*")
+	if err != nil {
+		return err
+	}
+	compName := comp.Name()
+	comp.Close()
+	defer os.Remove(compName) // no-op once renamed; cleanup otherwise
+
+	if err := Cmd(ctx, s.Codec.compressExpr(), map[string]string{
+		"src": shellQuote(plainName),
+		"dst": shellQuote(compName),
+	}); err != nil {
+		return err
+	}
+	if err := os.Rename(compName, out); err != nil {
 		return fmt.Errorf("promote %s: %w", out, err)
 	}
 	return nil

@@ -17,17 +17,25 @@ package rynek
 //	}
 type Ctx struct {
 	Params
-	Ext string // default output extension for shells built via Shell
+	Ext   string // default output extension for shells built via Shell
+	Codec Codec  // default compression for shells built via Shell
 }
 
 // Shell applies the ambient defaults to s and returns it: it fills in the
-// parameters used for the conventional output path, and -- unless the task set
-// its own -- the project default extension. What remains in the task literal is
-// the essential content: Name, In, Cmd.
+// parameters used for the conventional output path and, unless the task set its
+// own, the project default extension and codec. What remains in the task literal
+// is the essential content: Name, In, Cmd.
+//
+// A codec left empty inherits the project default, so a task cannot yet opt back
+// to plaintext against a compressed project -- an explicit "none" sentinel is a
+// later refinement.
 func (c Ctx) Shell(s Shell) Shell {
 	s.P = c.Params
 	if s.Ext == "" {
 		s.Ext = c.Ext
+	}
+	if s.Codec == NoCodec {
+		s.Codec = c.Codec
 	}
 	return s
 }

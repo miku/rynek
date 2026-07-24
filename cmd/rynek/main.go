@@ -29,10 +29,13 @@ import (
 
 const dateLayout = "2006-01-02"
 
-// projectExt is this binary's default output extension, applied to every task
-// via the build Ctx unless a task sets its own. A real deployment picks whatever
-// suits its artifacts (here: plain ".txt"); a later step can make it a codec.
+// projectExt and projectCodec are this binary's artifact defaults, applied to
+// every task via the build Ctx unless a task sets its own. Enabling zstd here is
+// the whole opt-in: no task code changes, intermediates become .txt.zst, and
+// downstream inputs are decompressed transparently.
 const projectExt = "txt"
+
+var projectCodec = rynek.Zstd
 
 func main() {
 	app := &cli.Command{
@@ -106,7 +109,7 @@ func rootTask(cmd *cli.Command) (rynek.Task, error) {
 		}
 		p.Date = parsed
 	}
-	return rynek.Lookup(name, rynek.Ctx{Params: p, Ext: projectExt})
+	return rynek.Lookup(name, rynek.Ctx{Params: p, Ext: projectExt, Codec: projectCodec})
 }
 
 func runCmd() *cli.Command {
@@ -325,7 +328,7 @@ func defaultCtx(info rynek.Registration) rynek.Ctx {
 	for _, pr := range info.Params {
 		extra[pr.Name] = pr.Default
 	}
-	return rynek.Ctx{Params: rynek.Params{Base: rynek.DefaultBase, Extra: extra}, Ext: projectExt}
+	return rynek.Ctx{Params: rynek.Params{Base: rynek.DefaultBase, Extra: extra}, Ext: projectExt, Codec: projectCodec}
 }
 
 func listCmd() *cli.Command {
