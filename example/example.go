@@ -15,9 +15,12 @@
 //	rynek deps Report                     # print the graph
 //	rynek status Report                   # which targets exist
 //
-// None of these tasks implement Key: rynek derives it from the type name and
-// the exported Config fields (e.g. "Report(Home=rynek-work,Date=2026-07-24)"),
-// so the shared Config embed dedups the diamond automatically.
+// Four of the five tasks are rynek.Shell values: a placeholder->task map for
+// inputs, an output path, and a bash pipeline. rynek supplies Requires, Output,
+// the atomic temp-and-rename, and the identity (the output path), so the shared
+// Config threaded through them dedups the diamond automatically. Corpus stays a
+// hand-written Task to show the two styles coexist: it generates its content in
+// Go rather than shelling out.
 //
 // Importing this package (for its side-effecting init) is enough to make the
 // tasks available to the CLI registry.
@@ -27,7 +30,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -37,27 +39,26 @@ import (
 )
 
 // repeatParam documents the one task-specific parameter this pipeline exposes.
-// Because it lives in the shared Config it flows into every task's key, so
-// changing it correctly rebuilds the whole graph.
+// Because it lives in the shared Config it flows into every task's output path
+// (and therefore its key), so changing it correctly rebuilds the whole graph.
 var repeatParam = rynek.WithParam("repeat", "how many times to repeat the sample corpus", "1")
 
 func init() {
 	rynek.Register("Corpus", func(p rynek.Params) rynek.Task { return Corpus{cfg(p)} },
 		rynek.Doc("write a fixed sample corpus (a leaf task, no upstream)"), repeatParam)
-	rynek.Register("Tokens", func(p rynek.Params) rynek.Task { return Tokens{cfg(p)} },
+	rynek.Register("Tokens", func(p rynek.Params) rynek.Task { return Tokens(cfg(p)) },
 		rynek.Doc("lowercase the corpus into one token per line"), repeatParam)
-	rynek.Register("Unique", func(p rynek.Params) rynek.Task { return Unique{cfg(p)} },
+	rynek.Register("Unique", func(p rynek.Params) rynek.Task { return Unique(cfg(p)) },
 		rynek.Doc("count the number of distinct tokens"), repeatParam)
-	rynek.Register("Frequencies", func(p rynek.Params) rynek.Task { return Frequencies{cfg(p)} },
+	rynek.Register("Frequencies", func(p rynek.Params) rynek.Task { return Frequencies(cfg(p)) },
 		rynek.Doc("build the token frequency histogram, most frequent first"), repeatParam)
-	rynek.Register("Report", func(p rynek.Params) rynek.Task { return Report{cfg(p)} },
+	rynek.Register("Report", func(p rynek.Params) rynek.Task { return Report(cfg(p)) },
 		rynek.Doc("combine the distinct-token count and the frequency histogram"), repeatParam)
 }
 
-// Config is the shared parameter set threaded through the pipeline. Its fields
-// are exported so rynek's reflection-derived Key can see them; embedding it in
-// each task flattens Home/Date/Repeat into every task's key. Date is optional;
-// when zero, artifacts land under a "static" prefix.
+// Config is the shared parameter set threaded through the pipeline. Embedding or
+// passing it to each task builder flows Home/Date/Repeat into every output path.
+// Date is optional; when zero, artifacts land under a "static" prefix.
 type Config struct {
 	Home   string
 	Date   time.Time
@@ -92,8 +93,10 @@ func (c Config) path(name, ext string) string {
 	return filepath.Join(c.Home, fmt.Sprintf("%s-%s.%s", name, suffix, ext))
 }
 
-// Corpus writes a fixed sample text. It has no upstream -- a "one-off" style
-// leaf task.
+// Corpus writes a fixed sample text. It generates content in Go rather than
+// shelling out, so it stays a hand-written Task -- the escape hatch that
+// rynek.Shell sits on top of. Atomic gives it the same crash-safe write the
+// Shell tasks get for free.
 type Corpus struct{ Config }
 
 func (t Corpus) Requires() []rynek.Task { return nil }
@@ -108,74 +111,45 @@ func (t Corpus) Run(ctx context.Context) error {
 }
 
 // Tokens lowercases the corpus and emits one word per line. Shared upstream.
-type Tokens struct{ Config }
-
-func (t Tokens) Requires() []rynek.Task { return []rynek.Task{Corpus{t.Config}} }
-func (t Tokens) Output() rynek.Target   { return rynek.FileTarget{Path: t.path("tokens", "txt")} }
-func (t Tokens) Run(ctx context.Context) error {
-	tmp := t.path("tokens", "txt") + ".tmp"
-	if err := rynek.Cmd(ctx,
-		`tr 'A-Z ' 'a-z\n' < {in} | grep -v '^$' > {out}`,
-		map[string]string{"in": t.path("corpus", "txt"), "out": tmp},
-	); err != nil {
-		return err
+func Tokens(c Config) rynek.Shell {
+	return rynek.Shell{
+		Name: "Tokens",
+		In:   rynek.Inputs{"in": Corpus{c}},
+		Out:  c.path("tokens", "txt"),
+		Cmd:  `tr 'A-Z ' 'a-z\n' < {in} | grep -v '^$' > {out}`,
 	}
-	return os.Rename(tmp, t.path("tokens", "txt"))
 }
 
 // Unique counts the number of distinct tokens.
-type Unique struct{ Config }
-
-func (t Unique) Requires() []rynek.Task { return []rynek.Task{Tokens{t.Config}} }
-func (t Unique) Output() rynek.Target   { return rynek.FileTarget{Path: t.path("unique", "txt")} }
-func (t Unique) Run(ctx context.Context) error {
-	tmp := t.path("unique", "txt") + ".tmp"
-	if err := rynek.Cmd(ctx,
-		`sort -u < {in} | wc -l | tr -d ' ' > {out}`,
-		map[string]string{"in": t.path("tokens", "txt"), "out": tmp},
-	); err != nil {
-		return err
+func Unique(c Config) rynek.Shell {
+	return rynek.Shell{
+		Name: "Unique",
+		In:   rynek.Inputs{"in": Tokens(c)},
+		Out:  c.path("unique", "txt"),
+		Cmd:  `sort -u < {in} | wc -l | tr -d ' ' > {out}`,
 	}
-	return os.Rename(tmp, t.path("unique", "txt"))
 }
 
 // Frequencies is the token histogram, most frequent first.
-type Frequencies struct{ Config }
-
-func (t Frequencies) Requires() []rynek.Task { return []rynek.Task{Tokens{t.Config}} }
-func (t Frequencies) Output() rynek.Target {
-	return rynek.FileTarget{Path: t.path("frequencies", "txt")}
-}
-func (t Frequencies) Run(ctx context.Context) error {
-	tmp := t.path("frequencies", "txt") + ".tmp"
-	if err := rynek.Cmd(ctx,
-		`sort < {in} | uniq -c | sort -rn > {out}`,
-		map[string]string{"in": t.path("tokens", "txt"), "out": tmp},
-	); err != nil {
-		return err
+func Frequencies(c Config) rynek.Shell {
+	return rynek.Shell{
+		Name: "Frequencies",
+		In:   rynek.Inputs{"in": Tokens(c)},
+		Out:  c.path("frequencies", "txt"),
+		Cmd:  `sort < {in} | uniq -c | sort -rn > {out}`,
 	}
-	return os.Rename(tmp, t.path("frequencies", "txt"))
 }
 
 // Report combines Unique and Frequencies. Its two dependencies share the Tokens
 // upstream, forming the diamond.
-type Report struct{ Config }
-
-func (t Report) Requires() []rynek.Task {
-	return []rynek.Task{Unique{t.Config}, Frequencies{t.Config}}
-}
-func (t Report) Output() rynek.Target { return rynek.FileTarget{Path: t.path("report", "txt")} }
-func (t Report) Run(ctx context.Context) error {
-	tmp := t.path("report", "txt") + ".tmp"
-	if err := rynek.Cmd(ctx,
-		`{ echo "distinct tokens: $(cat {uniq})"; echo "--- frequencies ---"; cat {freq}; } > {out}`,
-		map[string]string{
-			"uniq": t.path("unique", "txt"),
-			"freq": t.path("frequencies", "txt"),
-			"out":  tmp,
+func Report(c Config) rynek.Shell {
+	return rynek.Shell{
+		Name: "Report",
+		In: rynek.Inputs{
+			"uniq": Unique(c),
+			"freq": Frequencies(c),
 		},
-	); err != nil {
-		return err
+		Out: c.path("report", "txt"),
+		Cmd: `{ echo "distinct tokens: $(cat {uniq})"; echo "--- frequencies ---"; cat {freq}; } > {out}`,
 	}
-	return os.Rename(tmp, t.path("report", "txt"))
 }
