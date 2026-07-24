@@ -53,7 +53,7 @@ type Keyer interface {
 
 // Key returns a task's stable identity. If the task implements Keyer, that Key
 // is used verbatim; otherwise a key is derived by reflection from the concrete
-// type name and its exported fields, e.g. "Corpus(Home=rynek-work,Date=)" or
+// type name and its exported fields, e.g. "Corpus(Home=.data,Date=)" or
 // "CrossrefSnapshot(Date=2026-07-24,Feed=2)". Embedded structs are flattened so
 // a shared parameter bundle contributes its fields inline. Equal task values
 // therefore produce equal keys, which is what the runner relies on to dedup
