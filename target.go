@@ -48,6 +48,21 @@ func (f FileTarget) Exists(ctx context.Context) (bool, error) {
 // String makes FileTarget legible in logs and "status" output.
 func (f FileTarget) String() string { return f.Path }
 
+// Describe returns a human-readable, scriptable description of a target --
+// typically its path. A FileTarget (and any other fmt.Stringer target) reports
+// its String; a nil target yields the empty string. This is what the CLI's
+// "output" and "status" commands print.
+func Describe(t Target) string {
+	switch t := t.(type) {
+	case nil:
+		return ""
+	case fmt.Stringer:
+		return t.String()
+	default:
+		return fmt.Sprintf("%v", t)
+	}
+}
+
 // Atomic writes a file via a temp file in the same directory plus rename, so a
 // crash never leaves a half-written artifact that later reads as "complete".
 // The parent directory is created if missing.

@@ -26,32 +26,79 @@ func (p Params) Get(key, def string) string {
 // HasDate reports whether a date was supplied (non-zero).
 func (p Params) HasDate() bool { return !p.Date.IsZero() }
 
+// Param documents a single task parameter: an entry the task reads from
+// Params.Extra. It is surfaced by "rynek help <Task>" and can be supplied on the
+// CLI with -p name=value.
+type Param struct {
+	Name    string
+	Usage   string
+	Default string
+}
+
+// Registration is the CLI-facing metadata for a registered task type: how to
+// build it (New) plus documentation (Doc, Params) shown by "rynek help".
+type Registration struct {
+	Name   string
+	Doc    string
+	Params []Param
+	New    func(Params) Task
+}
+
+// Option customizes a task Registration at Register time.
+type Option func(*Registration)
+
+// Doc sets a task's description, shown by "rynek help <Task>".
+func Doc(s string) Option {
+	return func(r *Registration) { r.Doc = s }
+}
+
+// WithParam documents a task parameter (an Extra key) with a usage string and
+// default value. Repeat it once per parameter.
+func WithParam(name, usage, def string) Option {
+	return func(r *Registration) {
+		r.Params = append(r.Params, Param{Name: name, Usage: usage, Default: def})
+	}
+}
+
 var (
 	regMu sync.RWMutex
-	reg   = map[string]func(Params) Task{}
+	reg   = map[string]Registration{}
 )
 
 // Register wires a task name to a constructor so the CLI can build a root task
-// from "rynek run <Name> ...". It panics on a duplicate name, which surfaces
-// wiring mistakes at init time.
-func Register(name string, ctor func(Params) Task) {
+// from "rynek run <Name> ...". Optional Doc/WithParam options attach
+// documentation. It panics on a duplicate name, which surfaces wiring mistakes
+// at init time.
+func Register(name string, ctor func(Params) Task, opts ...Option) {
 	regMu.Lock()
 	defer regMu.Unlock()
 	if _, dup := reg[name]; dup {
 		panic(fmt.Sprintf("rynek: task already registered: %s", name))
 	}
-	reg[name] = ctor
+	r := Registration{Name: name, New: ctor}
+	for _, o := range opts {
+		o(&r)
+	}
+	reg[name] = r
 }
 
 // Lookup builds a registered task by name.
 func Lookup(name string, p Params) (Task, error) {
 	regMu.RLock()
-	ctor, ok := reg[name]
+	r, ok := reg[name]
 	regMu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("unknown task: %s (known: %v)", name, Names())
 	}
-	return ctor(p), nil
+	return r.New(p), nil
+}
+
+// Info returns the registration metadata for a task name, for documentation.
+func Info(name string) (Registration, bool) {
+	regMu.RLock()
+	r, ok := reg[name]
+	regMu.RUnlock()
+	return r, ok
 }
 
 // Names lists registered task names, sorted.

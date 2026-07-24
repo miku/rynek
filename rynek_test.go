@@ -276,6 +276,15 @@ func TestAutoKeyDedupsDiamond(t *testing.T) {
 	}
 }
 
+func TestDescribe(t *testing.T) {
+	if got := Describe(FileTarget{Path: "/data/out.txt"}); got != "/data/out.txt" {
+		t.Errorf("Describe(FileTarget) = %q, want the path", got)
+	}
+	if got := Describe(nil); got != "" {
+		t.Errorf("Describe(nil) = %q, want empty", got)
+	}
+}
+
 func TestAtomicWriteAndFileTarget(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sub", "out.txt")

@@ -32,5 +32,5 @@ go.work.sum
 # .vscode/
 
 # rynek artifacts / built binary
-rynek-work/
+.data/
 /rynek

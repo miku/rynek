@@ -18,12 +18,12 @@ race:
 vet:
 	go vet ./...
 
-# demo runs the bundled example pipeline into ./rynek-work.
+# demo runs the bundled example pipeline into ./.data.
 demo: build
 	./rynek run Report -v
 	@echo "---"
-	@cat rynek-work/report-static.txt
+	@cat .data/report-static.txt
 
 clean:
 	rm -f rynek
-	rm -rf rynek-work
+	rm -rf .data

@@ -6,8 +6,8 @@ A small, file-driven DAG task runner in Go, inspired by
 
 The whole model is three ideas:
 
-1. A **task** has a stable identity (`Key()`) and declared **dependencies**
-   (`Requires()`) — together a DAG.
+1. A **task** has a stable identity (its `Key`, derived automatically from its
+   parameters) and declared **dependencies** (`Requires()`) — together a DAG.
 2. A task produces a **target**; *target exists == task complete* (idempotency).
 3. A **runner** resolves the DAG and runs only what is missing, respecting
    dependency order and a concurrency limit.
@@ -36,7 +36,7 @@ Corpus ── Tokens ─┬─ Unique ─────┐
 
 `Tokens` and `Corpus` are shared upstreams, so they run exactly once. Try
 `./rynek run Report --date 2026-07-24` for dated artifacts, or delete a file in
-`rynek-work/` and re-run to watch only the affected branch rebuild.
+`.data/` and re-run to watch only the affected branch rebuild.
 
 ## Defining tasks
 
@@ -71,12 +71,42 @@ interface), which overrides the reflection default — handy for a static
 one-off key.
 
 A task need not have a date: a one-off omits the field (or leaves it zero) and
-writes to a static path. Register a constructor so the CLI can build it by name:
+writes to a static path. Register a constructor so the CLI can build it by name,
+and attach documentation with `Doc`/`WithParam` — surfaced by `rynek help
+<Task>` and `rynek list`:
 
 ```go
-rynek.Register("Report", func(p rynek.Params) rynek.Task {
-	return Report{Home: p.Get("home", "rynek-work"), Date: p.Date}
-})
+rynek.Register("Report",
+	func(p rynek.Params) rynek.Task {
+		return Report{Home: p.Get("home", ".data"), Date: p.Date}
+	},
+	rynek.Doc("combine the distinct-token count and the frequency histogram"),
+	rynek.WithParam("repeat", "how many times to repeat the sample corpus", "1"),
+)
+```
+
+Built-in flags (`--date`, `--home`) flow into `Params`; task-specific parameters
+come in generically via repeatable `-p name=value` and are read with
+`p.Get("name", default)`. A declared parameter's default is seeded automatically,
+so `-p` only needs to be passed to override it. Because such a parameter usually
+changes an artifact's contents, fold it into both the task key (put it in a field
+so reflection picks it up) **and** the output path, or the exists-based
+completeness check will treat a differently-parameterized file as done.
+
+```
+$ rynek help Report
+NAME:
+   Report - combine the distinct-token count and the frequency histogram
+USAGE:
+   rynek run Report [--date YYYY-MM-DD] [--home DIR] [-p repeat=...]
+PARAMETERS:
+   -p repeat=      how many times to repeat the sample corpus (default "1")
+...
+OUTPUT (with defaults):
+   .data/report-static.txt
+REQUIRES:
+   Unique(Home=.data,Date=,Repeat=1)
+   Frequencies(Home=.data,Date=,Repeat=1)
 ```
 
 Helpers included: `FileTarget` (existence, with opt-in mtime staleness),
@@ -101,10 +131,12 @@ that shell out to external tools).
 ## Commands
 
 ```
-rynek run    <Task> [--date YYYY-MM-DD] [--home DIR] [--workers N] [--force] [--dry-run] [-v]
-rynek deps   <Task> [--date ...] [--home DIR]
-rynek status <Task> [--date ...] [--home DIR]
-rynek list
+rynek run    <Task> [--date YYYY-MM-DD] [--home DIR] [-p k=v ...] [--workers N] [--force] [--dry-run] [-v]
+rynek deps   <Task> [--date ...] [--home DIR] [-p k=v ...]
+rynek status <Task> [--date ...] [--home DIR]   # state + output path per task
+rynek output <Task> [--date ...] [--home DIR] [--all]   # show the output path(s)
+rynek list                                      # tasks + descriptions
+rynek help   <Task>                             # params, output path, deps
 ```
 
 ## Development

@@ -29,30 +29,47 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/miku/rynek"
 )
 
+// repeatParam documents the one task-specific parameter this pipeline exposes.
+// Because it lives in the shared Config it flows into every task's key, so
+// changing it correctly rebuilds the whole graph.
+var repeatParam = rynek.WithParam("repeat", "how many times to repeat the sample corpus", "1")
+
 func init() {
-	rynek.Register("Corpus", func(p rynek.Params) rynek.Task { return Corpus{cfg(p)} })
-	rynek.Register("Tokens", func(p rynek.Params) rynek.Task { return Tokens{cfg(p)} })
-	rynek.Register("Unique", func(p rynek.Params) rynek.Task { return Unique{cfg(p)} })
-	rynek.Register("Frequencies", func(p rynek.Params) rynek.Task { return Frequencies{cfg(p)} })
-	rynek.Register("Report", func(p rynek.Params) rynek.Task { return Report{cfg(p)} })
+	rynek.Register("Corpus", func(p rynek.Params) rynek.Task { return Corpus{cfg(p)} },
+		rynek.Doc("write a fixed sample corpus (a leaf task, no upstream)"), repeatParam)
+	rynek.Register("Tokens", func(p rynek.Params) rynek.Task { return Tokens{cfg(p)} },
+		rynek.Doc("lowercase the corpus into one token per line"), repeatParam)
+	rynek.Register("Unique", func(p rynek.Params) rynek.Task { return Unique{cfg(p)} },
+		rynek.Doc("count the number of distinct tokens"), repeatParam)
+	rynek.Register("Frequencies", func(p rynek.Params) rynek.Task { return Frequencies{cfg(p)} },
+		rynek.Doc("build the token frequency histogram, most frequent first"), repeatParam)
+	rynek.Register("Report", func(p rynek.Params) rynek.Task { return Report{cfg(p)} },
+		rynek.Doc("combine the distinct-token count and the frequency histogram"), repeatParam)
 }
 
 // Config is the shared parameter set threaded through the pipeline. Its fields
 // are exported so rynek's reflection-derived Key can see them; embedding it in
-// each task flattens Home/Date into every task's key. Date is optional; when
-// zero, artifacts land under a "static" prefix.
+// each task flattens Home/Date/Repeat into every task's key. Date is optional;
+// when zero, artifacts land under a "static" prefix.
 type Config struct {
-	Home string
-	Date time.Time
+	Home   string
+	Date   time.Time
+	Repeat int
 }
 
 func cfg(p rynek.Params) Config {
-	return Config{Home: p.Get("home", "rynek-work"), Date: p.Date}
+	n, err := strconv.Atoi(p.Get("repeat", "1"))
+	if err != nil || n < 1 {
+		n = 1
+	}
+	return Config{Home: p.Get("home", ".data"), Date: p.Date, Repeat: n}
 }
 
 // prefix is the date component of an artifact path, or "static" when undated.
@@ -63,9 +80,16 @@ func (c Config) prefix() string {
 	return c.Date.Format("2006-01-02")
 }
 
-// path builds "<home>/<name>-<prefix>.<ext>".
+// path builds "<home>/<name>-<prefix>.<ext>". Any parameter that changes an
+// artifact's contents must also change its path, otherwise the exists-based
+// completeness check would treat a differently-parameterized file as done. The
+// Repeat parameter therefore appears in the filename when non-default.
 func (c Config) path(name, ext string) string {
-	return filepath.Join(c.Home, fmt.Sprintf("%s-%s.%s", name, c.prefix(), ext))
+	suffix := c.prefix()
+	if c.Repeat != 1 {
+		suffix += fmt.Sprintf("-r%d", c.Repeat)
+	}
+	return filepath.Join(c.Home, fmt.Sprintf("%s-%s.%s", name, suffix, ext))
 }
 
 // Corpus writes a fixed sample text. It has no upstream -- a "one-off" style
@@ -75,7 +99,8 @@ type Corpus struct{ Config }
 func (t Corpus) Requires() []rynek.Task { return nil }
 func (t Corpus) Output() rynek.Target   { return rynek.FileTarget{Path: t.path("corpus", "txt")} }
 func (t Corpus) Run(ctx context.Context) error {
-	const sample = "the quick brown fox the lazy dog the fox jumps the dog sleeps the quick fox\n"
+	const line = "the quick brown fox the lazy dog the fox jumps the dog sleeps the quick fox\n"
+	sample := strings.Repeat(line, t.Repeat)
 	return rynek.Atomic(t.path("corpus", "txt"), func(w io.Writer) error {
 		_, err := io.WriteString(w, sample)
 		return err
