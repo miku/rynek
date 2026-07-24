@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // fakeTarget flips to "exists" after the owning task runs. A counter records how
@@ -184,7 +185,7 @@ func TestGraphTopologicalOrder(t *testing.T) {
 	// Leaves first: A before B before C.
 	pos := map[string]int{}
 	for i, task := range order {
-		pos[task.Key()] = i
+		pos[Key(task)] = i
 	}
 	if !(pos["A"] < pos["B"] && pos["B"] < pos["C"]) {
 		t.Errorf("bad topological order: %v", keys(order))
@@ -194,9 +195,85 @@ func TestGraphTopologicalOrder(t *testing.T) {
 func keys(ts []Task) []string {
 	var out []string
 	for _, t := range ts {
-		out = append(out, t.Key())
+		out = append(out, Key(t))
 	}
 	return out
+}
+
+// autoTask has no Key method, so it exercises reflection-derived keys. Only its
+// exported fields (Tag, embedded Base) contribute to the key; the unexported
+// bookkeeping fields are ignored, which is exactly what lets two independently
+// constructed but value-equal upstreams dedup.
+type Base struct{ Home string }
+
+type autoTask struct {
+	Base
+	Tag  string
+	deps []Task
+	runs *atomic.Int64
+	done *atomic.Bool
+}
+
+func (t autoTask) Requires() []Task          { return t.deps }
+func (t autoTask) Output() Target            { return fakeTarget{done: t.done} }
+func (t autoTask) Run(context.Context) error { t.runs.Add(1); t.done.Store(true); return nil }
+
+func TestAutoKeyDerivation(t *testing.T) {
+	// Embedded Base is flattened (Home), unexported fields are skipped.
+	got := Key(autoTask{Base: Base{Home: "/data"}, Tag: "crossref"})
+	if want := "autoTask(Home=/data,Tag=crossref)"; got != want {
+		t.Errorf("Key = %q, want %q", got, want)
+	}
+
+	// A task that implements Keyer wins over reflection.
+	if got := Key(newFake("Explicit")); got != "Explicit" {
+		t.Errorf("Keyer not honored: got %q", got)
+	}
+}
+
+// snapshot mirrors a real dated task (like CrossrefSnapshot) for key tests.
+type snapshot struct {
+	Date time.Time
+	Feed string
+}
+
+func (s snapshot) Requires() []Task          { return nil }
+func (s snapshot) Output() Target            { return nil }
+func (s snapshot) Run(context.Context) error { return nil }
+
+func TestDateFormattingInKey(t *testing.T) {
+	d := snapshot{Date: time.Date(2026, 7, 24, 0, 0, 0, 0, time.UTC), Feed: "2"}
+	if got, want := Key(d), "snapshot(Date=2026-07-24,Feed=2)"; got != want {
+		t.Errorf("Key = %q, want %q", got, want)
+	}
+	// A zero date renders empty (the "undated / one-off" case).
+	if got, want := Key(snapshot{Feed: "2"}), "snapshot(Date=,Feed=2)"; got != want {
+		t.Errorf("Key = %q, want %q", got, want)
+	}
+}
+
+func TestAutoKeyDedupsDiamond(t *testing.T) {
+	// Same as the diamond test, but with reflection-derived keys: two parents
+	// each construct their own value-equal "A" upstream. It must still run once.
+	runsA, doneA := &atomic.Int64{}, &atomic.Bool{}
+	mkA := func() autoTask {
+		return autoTask{Tag: "A", runs: runsA, done: doneA}
+	}
+	mk := func(tag string, deps ...Task) autoTask {
+		return autoTask{Tag: tag, deps: deps, runs: &atomic.Int64{}, done: &atomic.Bool{}}
+	}
+	b := mk("B", mkA())
+	c := mk("C", mkA())
+	d := mk("D", b, c)
+
+	r := quietRunner()
+	r.Workers = 8
+	if err := r.Run(context.Background(), d); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := runsA.Load(); got != 1 {
+		t.Fatalf("auto-keyed shared upstream A ran %d times, want 1", got)
+	}
 }
 
 func TestAtomicWriteAndFileTarget(t *testing.T) {

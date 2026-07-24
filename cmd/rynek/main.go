@@ -130,12 +130,12 @@ func depsCmd() *cli.Command {
 // printTree renders the dependency graph as an indented tree, marking a node
 // already shown elsewhere so diamonds stay readable.
 func printTree(t rynek.Task, indent string, seen map[string]bool) {
-	if seen[t.Key()] {
-		fmt.Printf("%s%s (*)\n", indent, t.Key())
+	if seen[rynek.Key(t)] {
+		fmt.Printf("%s%s (*)\n", indent, rynek.Key(t))
 		return
 	}
-	seen[t.Key()] = true
-	fmt.Printf("%s%s\n", indent, t.Key())
+	seen[rynek.Key(t)] = true
+	fmt.Printf("%s%s\n", indent, rynek.Key(t))
 	for _, d := range t.Requires() {
 		printTree(d, indent+"  ", seen)
 	}
@@ -159,7 +159,7 @@ func statusCmd() *cli.Command {
 			for _, t := range order {
 				out := t.Output()
 				if out == nil {
-					fmt.Printf("%-12s %s\n", "wrapper", t.Key())
+					fmt.Printf("%-12s %s\n", "wrapper", rynek.Key(t))
 					continue
 				}
 				ok, err := out.Exists(ctx)
@@ -169,7 +169,7 @@ func statusCmd() *cli.Command {
 				} else if ok {
 					state = "exists"
 				}
-				fmt.Printf("%-12s %s\n", state, t.Key())
+				fmt.Printf("%-12s %s\n", state, rynek.Key(t))
 			}
 			return nil
 		},

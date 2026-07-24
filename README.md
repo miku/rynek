@@ -44,15 +44,34 @@ A task is any Go value implementing the interface:
 
 ```go
 type Task interface {
-	Key() string          // stable identity, parameters included
 	Requires() []Task     // upstream tasks; may be nil
 	Output() Target       // completion marker; may be nil (wrapper task)
 	Run(ctx context.Context) error
 }
 ```
 
-A task need not have a date: a one-off can key itself statically and write to a
-static path. Register a constructor so the CLI can build it by name:
+There is no `Key()` in the interface: identity is derived automatically. The
+`rynek.Key(task)` function reflects over the concrete type name and its exported
+fields, so a task's parameters become its key with zero boilerplate:
+
+```go
+type CrossrefSnapshot struct {
+	Date time.Time
+	Feed string
+}
+// rynek.Key(CrossrefSnapshot{Date: d, Feed: "2"}) == "CrossrefSnapshot(Date=2026-07-24,Feed=2)"
+```
+
+Embedded structs are flattened, so a shared parameter bundle (`type Config
+struct{ Home string; Date time.Time }`, embedded in each task) contributes its
+fields to every key — which is what makes equal task values dedup in the graph.
+Fields must be **exported** to appear in the key. A task that wants a custom
+identity string can opt in by implementing `Key() string` (the `Keyer`
+interface), which overrides the reflection default — handy for a static
+one-off key.
+
+A task need not have a date: a one-off omits the field (or leaves it zero) and
+writes to a static path. Register a constructor so the CLI can build it by name:
 
 ```go
 rynek.Register("Report", func(p rynek.Params) rynek.Task {

@@ -13,7 +13,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 )
@@ -25,15 +27,13 @@ type Target interface {
 	Exists(ctx context.Context) (bool, error)
 }
 
-// Task is a unit of work with a stable identity and declared dependencies.
+// Task is a unit of work with declared dependencies and a target.
 //
-// A task need not have a date parameter: a "one-off" task can key itself with a
-// static string and write to a static path. Parameters, when present, are
-// struct fields folded into Key so that two task values with the same key are
-// treated as the same node.
+// A task's identity is its Key (see the Key function): by default it is derived
+// automatically from the concrete type name and its exported parameter fields,
+// so most tasks need not spell one out. Two task values with the same key are
+// treated as the same node and run at most once per invocation.
 type Task interface {
-	// Key uniquely identifies this task instance, parameters included.
-	Key() string
 	// Requires lists upstream tasks that must complete first. May be nil.
 	Requires() []Task
 	// Output is the target that marks this task complete. May be nil for pure
@@ -41,6 +41,98 @@ type Task interface {
 	Output() Target
 	// Run produces Output. Called only when Output is absent (or Force).
 	Run(ctx context.Context) error
+}
+
+// Keyer is the optional escape hatch for a task that wants to control its own
+// identity string instead of the reflection-derived default (see Key). A task
+// need not have a date parameter: a "one-off" task can implement Key to return
+// a static string and write to a static path.
+type Keyer interface {
+	Key() string
+}
+
+// Key returns a task's stable identity. If the task implements Keyer, that Key
+// is used verbatim; otherwise a key is derived by reflection from the concrete
+// type name and its exported fields, e.g. "Corpus(Home=rynek-work,Date=)" or
+// "CrossrefSnapshot(Date=2026-07-24,Feed=2)". Embedded structs are flattened so
+// a shared parameter bundle contributes its fields inline. Equal task values
+// therefore produce equal keys, which is what the runner relies on to dedup
+// shared upstreams.
+func Key(t Task) string {
+	if k, ok := t.(Keyer); ok {
+		return k.Key()
+	}
+	return reflectKey(reflect.ValueOf(t))
+}
+
+func reflectKey(v reflect.Value) string {
+	for v.Kind() == reflect.Pointer {
+		if v.IsNil() {
+			return v.Type().String()
+		}
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Struct {
+		return fmt.Sprintf("%v", safeInterface(v))
+	}
+	var b strings.Builder
+	b.WriteString(v.Type().Name())
+	b.WriteByte('(')
+	n := 0
+	writeKeyFields(&b, v, &n)
+	b.WriteByte(')')
+	return b.String()
+}
+
+// writeKeyFields appends "name=value" for each exported field of v, recursing
+// into (and flattening) embedded structs so their fields appear inline.
+func writeKeyFields(b *strings.Builder, v reflect.Value, n *int) {
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		fv := v.Field(i)
+		if f.Anonymous {
+			ev := fv
+			for ev.Kind() == reflect.Pointer && !ev.IsNil() {
+				ev = ev.Elem()
+			}
+			if ev.Kind() == reflect.Struct {
+				writeKeyFields(b, ev, n)
+				continue
+			}
+		}
+		if *n > 0 {
+			b.WriteByte(',')
+		}
+		*n++
+		b.WriteString(f.Name)
+		b.WriteByte('=')
+		b.WriteString(formatKeyValue(fv))
+	}
+}
+
+func formatKeyValue(v reflect.Value) string {
+	if v.Type() == reflect.TypeOf(time.Time{}) {
+		tm := v.Interface().(time.Time)
+		if tm.IsZero() {
+			return ""
+		}
+		return tm.Format("2006-01-02")
+	}
+	return fmt.Sprintf("%v", safeInterface(v))
+}
+
+// safeInterface returns v.Interface(), falling back to the kind's string form
+// for values that cannot be read (e.g. unexported), so key derivation never
+// panics.
+func safeInterface(v reflect.Value) any {
+	if !v.CanInterface() {
+		return v.Kind().String()
+	}
+	return v.Interface()
 }
 
 // Runner resolves and executes a task DAG.
@@ -86,10 +178,10 @@ func (r *Runner) Run(ctx context.Context, root Task) error {
 // exec memoizes so each task key runs at most once per invocation.
 func (r *Runner) exec(ctx context.Context, t Task) error {
 	r.mu.Lock()
-	n, ok := r.memo[t.Key()]
+	n, ok := r.memo[Key(t)]
 	if !ok {
 		n = &node{}
-		r.memo[t.Key()] = n
+		r.memo[Key(t)] = n
 	}
 	r.mu.Unlock()
 
@@ -132,10 +224,10 @@ func (r *Runner) execOnce(ctx context.Context, t Task) error {
 	if !r.Force && t.Output() != nil {
 		ok, err := t.Output().Exists(ctx)
 		if err != nil {
-			return fmt.Errorf("%s: checking output: %w", t.Key(), err)
+			return fmt.Errorf("%s: checking output: %w", Key(t), err)
 		}
 		if ok {
-			r.Log.Debug("skip (complete)", "task", t.Key())
+			r.Log.Debug("skip (complete)", "task", Key(t))
 			return nil
 		}
 	}
@@ -146,7 +238,7 @@ func (r *Runner) execOnce(ctx context.Context, t Task) error {
 	}
 
 	if r.DryRun {
-		r.Log.Info("would run", "task", t.Key())
+		r.Log.Info("would run", "task", Key(t))
 		return nil
 	}
 
@@ -159,12 +251,12 @@ func (r *Runner) execOnce(ctx context.Context, t Task) error {
 	defer func() { <-r.sem }()
 
 	start := time.Now()
-	r.Log.Info("run", "task", t.Key())
+	r.Log.Info("run", "task", Key(t))
 	if err := t.Run(ctx); err != nil {
-		r.Log.Error("failed", "task", t.Key(), "err", err)
-		return fmt.Errorf("%s: %w", t.Key(), err)
+		r.Log.Error("failed", "task", Key(t), "err", err)
+		return fmt.Errorf("%s: %w", Key(t), err)
 	}
-	r.Log.Info("done", "task", t.Key(), "took", time.Since(start).Round(time.Millisecond))
+	r.Log.Info("done", "task", Key(t), "took", time.Since(start).Round(time.Millisecond))
 	return nil
 }
 
@@ -179,7 +271,7 @@ func Graph(root Task) ([]Task, error) {
 
 	var visit func(t Task) error
 	visit = func(t Task) error {
-		k := t.Key()
+		k := Key(t)
 		if onPath[k] {
 			return fmt.Errorf("cycle detected involving %s", k)
 		}

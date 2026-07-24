@@ -15,6 +15,10 @@
 //	rynek deps Report                     # print the graph
 //	rynek status Report                   # which targets exist
 //
+// None of these tasks implement Key: rynek derives it from the type name and
+// the exported Config fields (e.g. "Report(Home=rynek-work,Date=2026-07-24)"),
+// so the shared Config embed dedups the diamond automatically.
+//
 // Importing this package (for its side-effecting init) is enough to make the
 // tasks available to the CLI registry.
 package example
@@ -38,39 +42,36 @@ func init() {
 	rynek.Register("Report", func(p rynek.Params) rynek.Task { return Report{cfg(p)} })
 }
 
-// config is the shared parameter set threaded through the pipeline. Date is
-// optional; when zero, artifacts land under a "static" prefix.
-type config struct {
+// Config is the shared parameter set threaded through the pipeline. Its fields
+// are exported so rynek's reflection-derived Key can see them; embedding it in
+// each task flattens Home/Date into every task's key. Date is optional; when
+// zero, artifacts land under a "static" prefix.
+type Config struct {
 	Home string
 	Date time.Time
 }
 
-func cfg(p rynek.Params) config {
-	return config{Home: p.Get("home", ".rynek/data"), Date: p.Date}
+func cfg(p rynek.Params) Config {
+	return Config{Home: p.Get("home", "rynek-work"), Date: p.Date}
 }
 
-// path builds "<home>/<name>-<prefix>.<ext>" where prefix is the date, if any.
-func (c config) path(name, ext string) string {
-	prefix := "static"
-	if !c.Date.IsZero() {
-		prefix = c.Date.Format("2006-01-02")
-	}
-	return filepath.Join(c.Home, fmt.Sprintf("%s-%s.%s", name, prefix, ext))
-}
-
-// keySuffix disambiguates task keys by parameters.
-func (c config) keySuffix() string {
+// prefix is the date component of an artifact path, or "static" when undated.
+func (c Config) prefix() string {
 	if c.Date.IsZero() {
 		return "static"
 	}
 	return c.Date.Format("2006-01-02")
 }
 
-// Corpus writes a fixed sample text. It has no upstream and (deliberately) no
-// date requirement of its own -- a "one-off" style leaf task.
-type Corpus struct{ config }
+// path builds "<home>/<name>-<prefix>.<ext>".
+func (c Config) path(name, ext string) string {
+	return filepath.Join(c.Home, fmt.Sprintf("%s-%s.%s", name, c.prefix(), ext))
+}
 
-func (t Corpus) Key() string            { return "Corpus(" + t.keySuffix() + ")" }
+// Corpus writes a fixed sample text. It has no upstream -- a "one-off" style
+// leaf task.
+type Corpus struct{ Config }
+
 func (t Corpus) Requires() []rynek.Task { return nil }
 func (t Corpus) Output() rynek.Target   { return rynek.FileTarget{Path: t.path("corpus", "txt")} }
 func (t Corpus) Run(ctx context.Context) error {
@@ -82,10 +83,9 @@ func (t Corpus) Run(ctx context.Context) error {
 }
 
 // Tokens lowercases the corpus and emits one word per line. Shared upstream.
-type Tokens struct{ config }
+type Tokens struct{ Config }
 
-func (t Tokens) Key() string            { return "Tokens(" + t.keySuffix() + ")" }
-func (t Tokens) Requires() []rynek.Task { return []rynek.Task{Corpus{t.config}} }
+func (t Tokens) Requires() []rynek.Task { return []rynek.Task{Corpus{t.Config}} }
 func (t Tokens) Output() rynek.Target   { return rynek.FileTarget{Path: t.path("tokens", "txt")} }
 func (t Tokens) Run(ctx context.Context) error {
 	tmp := t.path("tokens", "txt") + ".tmp"
@@ -99,10 +99,9 @@ func (t Tokens) Run(ctx context.Context) error {
 }
 
 // Unique counts the number of distinct tokens.
-type Unique struct{ config }
+type Unique struct{ Config }
 
-func (t Unique) Key() string            { return "Unique(" + t.keySuffix() + ")" }
-func (t Unique) Requires() []rynek.Task { return []rynek.Task{Tokens{t.config}} }
+func (t Unique) Requires() []rynek.Task { return []rynek.Task{Tokens{t.Config}} }
 func (t Unique) Output() rynek.Target   { return rynek.FileTarget{Path: t.path("unique", "txt")} }
 func (t Unique) Run(ctx context.Context) error {
 	tmp := t.path("unique", "txt") + ".tmp"
@@ -116,10 +115,9 @@ func (t Unique) Run(ctx context.Context) error {
 }
 
 // Frequencies is the token histogram, most frequent first.
-type Frequencies struct{ config }
+type Frequencies struct{ Config }
 
-func (t Frequencies) Key() string            { return "Frequencies(" + t.keySuffix() + ")" }
-func (t Frequencies) Requires() []rynek.Task { return []rynek.Task{Tokens{t.config}} }
+func (t Frequencies) Requires() []rynek.Task { return []rynek.Task{Tokens{t.Config}} }
 func (t Frequencies) Output() rynek.Target {
 	return rynek.FileTarget{Path: t.path("frequencies", "txt")}
 }
@@ -136,11 +134,10 @@ func (t Frequencies) Run(ctx context.Context) error {
 
 // Report combines Unique and Frequencies. Its two dependencies share the Tokens
 // upstream, forming the diamond.
-type Report struct{ config }
+type Report struct{ Config }
 
-func (t Report) Key() string { return "Report(" + t.keySuffix() + ")" }
 func (t Report) Requires() []rynek.Task {
-	return []rynek.Task{Unique{t.config}, Frequencies{t.config}}
+	return []rynek.Task{Unique{t.Config}, Frequencies{t.Config}}
 }
 func (t Report) Output() rynek.Target { return rynek.FileTarget{Path: t.path("report", "txt")} }
 func (t Report) Run(ctx context.Context) error {
